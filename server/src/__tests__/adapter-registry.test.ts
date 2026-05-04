@@ -398,6 +398,10 @@ describe("server adapter registry", () => {
     expect(patchedCtx.config).toBe(ctx.config);
     expect(patchedCtx.context).toBe(ctx.context);
     expect(patchedCtx.onLog).not.toBe(ctx.onLog);
+    expect(patchedCtx.config.quiet).toBe(false);
+    expect(patchedCtx.agent.adapterConfig.quiet).toBe(false);
+    expect(patchedCtx.config.verbose).toBe(true);
+    expect(patchedCtx.agent.adapterConfig.verbose).toBe(true);
   });
 
   it("preserves an explicit Hermes Paperclip API key and does not set promptTemplate when none was configured", async () => {
@@ -495,6 +499,37 @@ describe("server adapter registry", () => {
     });
 
     expect(logs).toEqual([{ stream: "stdout", chunk: "real output\n" }]);
+  });
+
+  it("filters Hermes verbose credential summaries before persisting live logs", async () => {
+    const logs: Array<{ stream: string; chunk: string }> = [];
+    hermesExecuteMock.mockImplementationOnce(async (ctx) => {
+      await ctx.onLog("stdout", "🔑 Using API key: eyJhbGci...secret\nvisible output\n");
+      return { exitCode: 0, signal: null, timedOut: false };
+    });
+    const adapter = requireServerAdapter("hermes_local");
+
+    await adapter.execute({
+      runId: "run-123",
+      agent: {
+        id: "agent-123",
+        companyId: "company-123",
+        name: "Hermes Agent",
+        role: "engineer",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+      },
+      runtime: {},
+      config: {},
+      context: {},
+      onLog: async (stream, chunk) => {
+        logs.push({ stream, chunk });
+      },
+      onMeta: async () => {},
+      onSpawn: async () => {},
+    });
+
+    expect(logs).toEqual([{ stream: "stdout", chunk: "visible output\n" }]);
   });
 
   it("exposes Hermes runtime command detection and install metadata", () => {

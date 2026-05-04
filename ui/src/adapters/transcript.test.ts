@@ -199,4 +199,52 @@ describe("buildTranscript", () => {
 
     expect(entries).toEqual([{ kind: "assistant", ts, text: "real agent output" }]);
   });
+
+  it("parses visible Hermes tool progress and thinking output", () => {
+    const entries = buildTranscript(
+      [
+        { ts, stream: "stdout", chunk: "Query: inspect files\n" },
+        { ts, stream: "stdout", chunk: "🔑 Using API key: eyJhbGci...secret\n" },
+        { ts, stream: "stdout", chunk: "  [thinking] Need to inspect the repo first.\n" },
+        { ts, stream: "stdout", chunk: "  ┊ 🔎 find      *  0.7s\n" },
+        { ts, stream: "stdout", chunk: "  ⚡ Concurrent: 2 tool calls — search_files, read_file\n" },
+        { ts, stream: "stdout", chunk: "  ┊ 📖 read      README.md  1.1s\n" },
+        { ts, stream: "stdout", chunk: "DONE_VISIBLE\n" },
+      ],
+      hermesLocalUIAdapter,
+    );
+
+    expect(entries).toEqual([
+      { kind: "thinking", ts, text: "Need to inspect the repo first.", delta: true },
+      {
+        kind: "tool_call",
+        ts,
+        name: "search",
+        input: { detail: "*" },
+        toolUseId: expect.stringMatching(/^hermes-visible-tool-/),
+      },
+      {
+        kind: "tool_result",
+        ts,
+        toolUseId: expect.stringMatching(/^hermes-visible-tool-/),
+        content: "*  0.7s",
+        isError: false,
+      },
+      {
+        kind: "tool_call",
+        ts,
+        name: "read",
+        input: { detail: "README.md" },
+        toolUseId: expect.stringMatching(/^hermes-visible-tool-/),
+      },
+      {
+        kind: "tool_result",
+        ts,
+        toolUseId: expect.stringMatching(/^hermes-visible-tool-/),
+        content: "README.md  1.1s",
+        isError: false,
+      },
+      { kind: "assistant", ts, text: "DONE_VISIBLE" },
+    ]);
+  });
 });

@@ -201,6 +201,18 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
   if (agentAdapterConfig && !agentAdapterConfig.hermesCommand && agentCommand) {
     agentAdapterConfig.hermesCommand = agentCommand;
   }
+  if (config && config.quiet === undefined) {
+    config.quiet = false;
+  }
+  if (agentAdapterConfig && agentAdapterConfig.quiet === undefined) {
+    agentAdapterConfig.quiet = false;
+  }
+  if (config && config.verbose === undefined) {
+    config.verbose = true;
+  }
+  if (agentAdapterConfig && agentAdapterConfig.verbose === undefined) {
+    agentAdapterConfig.verbose = true;
+  }
 
   return ctx;
 }
@@ -215,13 +227,34 @@ function isBenignHermesLogChunk(chunk: string): boolean {
   return chunk.includes("Normalized model") && chunk.includes("for openai-codex");
 }
 
+function shouldDropHermesLogLine(line: string): boolean {
+  return isBenignHermesLogChunk(line) || /Using API key:/i.test(line);
+}
+
+function filterHermesLogChunk(chunk: string): string {
+  return chunk
+    .split(/(\n)/)
+    .reduce<string[]>((parts, part, index, all) => {
+      if (part === "\n") {
+        const previous = parts[parts.length - 1] ?? "";
+        if (previous.length > 0 && all[index - 1] !== undefined) parts.push(part);
+        return parts;
+      }
+      if (part.length === 0 || shouldDropHermesLogLine(part)) return parts;
+      parts.push(part);
+      return parts;
+    }, [])
+    .join("");
+}
+
 function filterBenignHermesLogs<T extends AdapterExecutionContext>(ctx: T): T {
   const originalOnLog = ctx.onLog;
   return {
     ...ctx,
     onLog: async (stream: "stdout" | "stderr", chunk: string) => {
-      if (isBenignHermesLogChunk(chunk)) return;
-      await originalOnLog(stream, chunk);
+      const filtered = filterHermesLogChunk(chunk);
+      if (!filtered) return;
+      await originalOnLog(stream, filtered);
     },
   };
 }
