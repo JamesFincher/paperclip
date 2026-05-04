@@ -1,4 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ServerAdapterModule } from "../adapters/index.js";
 
 const hermesExecuteMock = vi.hoisted(() =>
@@ -8,15 +11,18 @@ const hermesExecuteMock = vi.hoisted(() =>
     timedOut: false,
   })),
 );
+const hermesTestEnvironmentMock = vi.hoisted(() =>
+  vi.fn(async () => ({
+    adapterType: "hermes_local",
+    status: "pass" as const,
+    checks: [],
+    testedAt: new Date(0).toISOString(),
+  })),
+);
 
 vi.mock("hermes-paperclip-adapter/server", () => ({
   execute: hermesExecuteMock,
-  testEnvironment: async () => ({
-    adapterType: "hermes_local",
-    status: "pass",
-    checks: [],
-    testedAt: new Date(0).toISOString(),
-  }),
+  testEnvironment: hermesTestEnvironmentMock,
   sessionCodec: null,
   listSkills: async () => [],
   syncSkills: async () => ({ entries: [] }),
@@ -67,6 +73,7 @@ describe("server adapter registry", () => {
     unregisterServerAdapter("claude_local");
     setOverridePaused("claude_local", false);
     hermesExecuteMock.mockClear();
+    hermesTestEnvironmentMock.mockClear();
   });
 
   it("registers external adapters and exposes them through lookup helpers", async () => {
@@ -356,7 +363,7 @@ describe("server adapter registry", () => {
     expect(patchedCtx.agent.adapterConfig.env.PAPERCLIP_API_KEY).toBe("agent-run-jwt");
   });
 
-  it("passes the original Hermes context through when authToken is absent", async () => {
+  it("passes Hermes context through when authToken is absent", async () => {
     const adapter = requireServerAdapter("hermes_local");
     const ctx = {
       runId: "run-123",
@@ -384,7 +391,13 @@ describe("server adapter registry", () => {
     await adapter.execute(ctx);
 
     expect(hermesExecuteMock).toHaveBeenCalledTimes(1);
-    expect(hermesExecuteMock).toHaveBeenCalledWith(ctx);
+    const [patchedCtx] = hermesExecuteMock.mock.calls[0];
+    expect(patchedCtx.runId).toBe(ctx.runId);
+    expect(patchedCtx.agent).toBe(ctx.agent);
+    expect(patchedCtx.runtime).toBe(ctx.runtime);
+    expect(patchedCtx.config).toBe(ctx.config);
+    expect(patchedCtx.context).toBe(ctx.context);
+    expect(patchedCtx.onLog).not.toBe(ctx.onLog);
   });
 
   it("preserves an explicit Hermes Paperclip API key and does not set promptTemplate when none was configured", async () => {
@@ -452,6 +465,38 @@ describe("server adapter registry", () => {
     expect(patchedCtx.agent.adapterConfig.env.PAPERCLIP_API_KEY).toBe("agent-run-jwt");
   });
 
+  it("filters benign Hermes model normalization noise before persisting live logs", async () => {
+    const logs: Array<{ stream: string; chunk: string }> = [];
+    hermesExecuteMock.mockImplementationOnce(async (ctx) => {
+      await ctx.onLog("stdout", "⚠️ Normalized model 'openai-codex/gpt-5.5' to 'gpt-5.5' for openai-codex.\n");
+      await ctx.onLog("stdout", "real output\n");
+      return { exitCode: 0, signal: null, timedOut: false };
+    });
+    const adapter = requireServerAdapter("hermes_local");
+
+    await adapter.execute({
+      runId: "run-123",
+      agent: {
+        id: "agent-123",
+        companyId: "company-123",
+        name: "Hermes Agent",
+        role: "engineer",
+        adapterType: "hermes_local",
+        adapterConfig: {},
+      },
+      runtime: {},
+      config: {},
+      context: {},
+      onLog: async (stream, chunk) => {
+        logs.push({ stream, chunk });
+      },
+      onMeta: async () => {},
+      onSpawn: async () => {},
+    });
+
+    expect(logs).toEqual([{ stream: "stdout", chunk: "real output\n" }]);
+  });
+
   it("exposes Hermes runtime command detection and install metadata", () => {
     const adapter = requireServerAdapter("hermes_local");
 
@@ -465,6 +510,44 @@ describe("server adapter registry", () => {
       detectCommand: "/opt/hermes/bin/hermes",
       installCommand: null,
     });
+  });
+
+  it("treats Hermes OpenAI Codex auth as satisfying the environment check", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "paperclip-hermes-auth-"));
+    const hermes = join(tmp, "hermes");
+    await writeFile(hermes, "#!/bin/sh\necho 'openai-codex: logged in'\n", "utf8");
+    await chmod(hermes, 0o755);
+    hermesTestEnvironmentMock.mockResolvedValueOnce({
+      adapterType: "hermes_local",
+      status: "warn",
+      checks: [
+        {
+          code: "hermes_no_api_keys",
+          level: "warn",
+          message: "No LLM API keys found in environment",
+        },
+      ],
+      testedAt: new Date(0).toISOString(),
+    });
+    const adapter = requireServerAdapter("hermes_local");
+
+    const result = await adapter.testEnvironment({
+      adapterType: "hermes_local",
+      companyId: "company-123",
+      config: {
+        hermesCommand: hermes,
+        model: "openai-codex/gpt-5.5",
+        provider: "openai-codex",
+      },
+    });
+
+    expect(result.status).toBe("pass");
+    expect(result.checks).toEqual([
+      expect.objectContaining({
+        code: "hermes_openai_codex_auth_found",
+        level: "info",
+      }),
+    ]);
   });
 });
 

@@ -1,4 +1,6 @@
-import type { AdapterModelProfileDefinition, AdapterRuntimeCommandSpec, ServerAdapterModule } from "./types.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import type { AdapterExecutionContext, AdapterModelProfileDefinition, AdapterRuntimeCommandSpec, ServerAdapterModule } from "./types.js";
 import { getAdapterSessionManagement } from "@paperclipai/adapter-utils";
 import {
   execute as acpxExecute,
@@ -113,6 +115,8 @@ import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
 
+const execFileAsync = promisify(execFile);
+
 function readConfiguredCommand(config: Record<string, unknown>, fallback: string): string {
   const value = typeof config.command === "string" ? config.command.trim() : "";
   return value.length > 0 ? value : fallback;
@@ -200,6 +204,84 @@ function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(
 
   return ctx;
 }
+
+function isHermesOpenAiCodexConfig(config: Record<string, unknown>): boolean {
+  const provider = typeof config.provider === "string" ? config.provider.trim() : "";
+  const model = typeof config.model === "string" ? config.model.trim().toLowerCase() : "";
+  return provider === "openai-codex" || model.startsWith("openai-codex/") || model.includes("codex");
+}
+
+function isBenignHermesLogChunk(chunk: string): boolean {
+  return chunk.includes("Normalized model") && chunk.includes("for openai-codex");
+}
+
+function filterBenignHermesLogs<T extends AdapterExecutionContext>(ctx: T): T {
+  const originalOnLog = ctx.onLog;
+  return {
+    ...ctx,
+    onLog: async (stream: "stdout" | "stderr", chunk: string) => {
+      if (isBenignHermesLogChunk(chunk)) return;
+      await originalOnLog(stream, chunk);
+    },
+  };
+}
+
+async function hermesOpenAiCodexAuthIsLoggedIn(command: string): Promise<boolean> {
+  try {
+    const { stdout, stderr } = await execFileAsync(command, ["auth", "status", "openai-codex"], {
+      timeout: 10_000,
+    });
+    return `${stdout}\n${stderr}`.toLowerCase().includes("logged in");
+  } catch {
+    return false;
+  }
+}
+
+const testHermesLocalEnvironment: ServerAdapterModule["testEnvironment"] = async (ctx) => {
+  const normalizedCtx = normalizeHermesConfig(ctx);
+  const result = await hermesTestEnvironment(normalizedCtx as never);
+  const config =
+    normalizedCtx.config && typeof normalizedCtx.config === "object"
+      ? (normalizedCtx.config as Record<string, unknown>)
+      : {};
+
+  if (!isHermesOpenAiCodexConfig(config)) return result;
+
+  const command = readConfiguredHermesCommand(config);
+  if (await hermesOpenAiCodexAuthIsLoggedIn(command)) {
+    const checks = result.checks.map((check) =>
+      check.code === "hermes_no_api_keys"
+        ? {
+            code: "hermes_openai_codex_auth_found",
+            level: "info" as const,
+            message: "OpenAI Codex OAuth credentials found via Hermes auth",
+            hint: "Hermes will use the openai-codex provider instead of API-key environment variables.",
+          }
+        : check,
+    );
+    const hasErrors = checks.some((check) => check.level === "error");
+    const hasWarnings = checks.some((check) => check.level === "warn");
+    return {
+      ...result,
+      status: hasErrors ? "fail" : hasWarnings ? "warn" : "pass",
+      checks,
+    };
+  }
+
+  return {
+    ...result,
+    status: result.status === "fail" ? "fail" : "warn",
+    checks: [
+      ...result.checks,
+      {
+        code: "hermes_openai_codex_auth_missing",
+        level: "warn",
+        message: "OpenAI Codex OAuth credentials are not available to Hermes",
+        hint: "Run `hermes auth add openai-codex --type oauth` in the Paperclip runtime.",
+      },
+    ],
+  };
+};
 
 const claudeLocalAdapter: ServerAdapterModule = {
   type: "claude_local",
@@ -354,7 +436,7 @@ const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["exec
 const hermesLocalAdapter: ServerAdapterModule = {
   type: "hermes_local",
   execute: async (ctx) => {
-    const normalizedCtx = normalizeHermesConfig(ctx);
+    const normalizedCtx = filterBenignHermesLogs(normalizeHermesConfig(ctx));
     if (!normalizedCtx.authToken) return executeHermesLocal(normalizedCtx);
 
     const existingConfig = (normalizedCtx.agent.adapterConfig ?? {}) as Record<string, unknown>;
@@ -401,7 +483,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
 
     return executeHermesLocal(patchedCtx);
   },
-  testEnvironment: (ctx) => hermesTestEnvironment(normalizeHermesConfig(ctx) as never),
+  testEnvironment: testHermesLocalEnvironment,
   sessionCodec: hermesSessionCodec,
   listSkills: hermesListSkills,
   syncSkills: hermesSyncSkills,

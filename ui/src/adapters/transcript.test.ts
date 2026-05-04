@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { hermesLocalUIAdapter } from "./hermes-local";
 import { buildTranscript, type RunLogChunk } from "./transcript";
 import type { UIAdapterModule } from "./types";
 
@@ -181,5 +182,21 @@ describe("buildTranscript", () => {
         errors: [],
       },
     ]);
+  });
+
+  it("filters benign Hermes model normalization noise from chat previews", () => {
+    const entries = buildTranscript(
+      [
+        {
+          ts,
+          stream: "stdout",
+          chunk: "⚠️ Normalized model 'openai-codex/gpt-5.5' to 'gpt-5.5' for openai-codex.\n",
+        },
+        { ts, stream: "stdout", chunk: "real agent output\n" },
+      ],
+      hermesLocalUIAdapter,
+    );
+
+    expect(entries).toEqual([{ kind: "assistant", ts, text: "real agent output" }]);
   });
 });
