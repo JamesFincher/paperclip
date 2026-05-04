@@ -75,7 +75,18 @@ PAPERCLIP_PORT=3200 PAPERCLIP_DATA_DIR=../data/pc \
 
 If you change host port or use a non-local domain, set `PAPERCLIP_PUBLIC_URL` to the external URL you will use in browser/auth flows.
 
-Pass `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY` to enable local adapter runs.
+For Codex local adapter runs, you can use either ChatGPT-backed Codex login or
+an OpenAI Platform API key:
+
+- Leave `OPENAI_API_KEY` empty or unset to use the local Codex login session.
+  This is the path to use when you want Codex usage to come from your ChatGPT
+  plan quota.
+- Set `OPENAI_API_KEY` only when you intentionally want API-key billing through
+  the OpenAI Platform.
+
+The quickstart compose file forwards `OPENAI_API_KEY` as an empty string when it
+is unset and sets `CODEX_HOME=/paperclip/.codex`, so container-local Codex login
+persists under the same `/paperclip` data mount as the rest of Paperclip.
 
 ### Full stack (with PostgreSQL)
 
@@ -128,14 +139,88 @@ The image pre-installs:
 - `claude` (Anthropic Claude Code CLI)
 - `codex` (OpenAI Codex CLI)
 
-If you want local adapter runs inside the container, pass API keys when starting the container:
+### Codex with ChatGPT plan quota
+
+To use Codex through ChatGPT sign-in, start Paperclip with no non-empty
+`OPENAI_API_KEY` in the Paperclip runtime:
+
+```sh
+OPENAI_API_KEY= \
+BETTER_AUTH_SECRET=$(openssl rand -hex 32) \
+  docker compose -f docker/docker-compose.quickstart.yml up --build
+```
+
+Then authenticate Codex inside the running Paperclip container:
+
+```sh
+docker compose -f docker/docker-compose.quickstart.yml exec paperclip sh -lc '
+  mkdir -p "$CODEX_HOME" &&
+  printf "cli_auth_credentials_store = \"file\"\n" > "$CODEX_HOME/config.toml" &&
+  codex login --device-auth
+'
+
+docker compose -f docker/docker-compose.quickstart.yml exec paperclip codex login status
+```
+
+`HOME` is `/paperclip` in the image and `CODEX_HOME` defaults to
+`/paperclip/.codex`, so a file-backed login creates
+`/paperclip/.codex/auth.json` in the persistent Paperclip data mount.
+
+If you already authenticated on the host and need to copy that session into the
+container, first make sure host credentials are file-backed:
+
+```sh
+mkdir -p ~/.codex
+printf "cli_auth_credentials_store = \"file\"\n" > ~/.codex/config.toml
+codex login
+codex login status
+```
+
+Then copy only the Codex credential files into the container home:
+
+```sh
+CONTAINER_ID=$(docker compose -f docker/docker-compose.quickstart.yml ps -q paperclip)
+CONTAINER_HOME=$(docker exec "$CONTAINER_ID" printenv HOME)
+
+docker exec "$CONTAINER_ID" mkdir -p "$CONTAINER_HOME/.codex"
+docker cp ~/.codex/auth.json "$CONTAINER_ID":"$CONTAINER_HOME/.codex/auth.json"
+docker cp ~/.codex/config.toml "$CONTAINER_ID":"$CONTAINER_HOME/.codex/config.toml"
+docker exec "$CONTAINER_ID" sh -lc 'chmod 700 ~/.codex && chmod 600 ~/.codex/auth.json ~/.codex/config.toml'
+docker exec "$CONTAINER_ID" codex login status
+```
+
+Prefer container-local login or file-specific copies over mounting your whole
+host home directory. Treat `auth.json` like a password.
+
+### Codex with OpenAI Platform API billing
+
+If you want local adapter runs inside the container to use Platform API billing,
+pass `OPENAI_API_KEY` when starting the container:
 
 ```sh
 docker run --name paperclip \
   -p 3100:3100 \
   -e HOST=0.0.0.0 \
   -e PAPERCLIP_HOME=/paperclip \
+  -e CODEX_HOME=/paperclip/.codex \
   -e OPENAI_API_KEY=... \
+  -v "$(pwd)/data/docker-paperclip:/paperclip" \
+  paperclip-local
+```
+
+The `codex_local` adapter records runs as API-billed when
+`OPENAI_API_KEY` is non-empty. If local ChatGPT auth is also present, the
+non-empty API key still selects API-key mode from Paperclip's point of view.
+
+### Claude
+
+Pass `ANTHROPIC_API_KEY` when you want Claude local adapter API-key auth:
+
+```sh
+docker run --name paperclip \
+  -p 3100:3100 \
+  -e HOST=0.0.0.0 \
+  -e PAPERCLIP_HOME=/paperclip \
   -e ANTHROPIC_API_KEY=... \
   -v "$(pwd)/data/docker-paperclip:/paperclip" \
   paperclip-local
@@ -144,6 +229,8 @@ docker run --name paperclip \
 Notes:
 
 - Without API keys, the app still runs normally.
+- Without `OPENAI_API_KEY`, Codex runs require a working local Codex login in
+  the same runtime as Paperclip.
 - Adapter environment checks in Paperclip will surface missing auth/CLI prerequisites.
 
 ## Podman Quadlet (systemd)

@@ -127,7 +127,8 @@ export async function testEnvironment(
       code: "codex_openai_api_key_present",
       level: "info",
       message: "OPENAI_API_KEY is set for Codex authentication.",
-      detail: `Detected in ${source}.`,
+      detail: `Detected in ${source}; Codex runs will use API-key billing instead of ChatGPT-backed local Codex login.`,
+      hint: "Unset OPENAI_API_KEY in the Paperclip runtime when you want codex_local to use ChatGPT subscription quota.",
     });
   } else if (!targetIsRemote) {
     // Local-only auth file check. On remote targets, the probe will surface
@@ -138,15 +139,15 @@ export async function testEnvironment(
       checks.push({
         code: "codex_native_auth_present",
         level: "info",
-        message: "Codex is authenticated via its own auth configuration.",
+        message: "Codex is authenticated via local Codex login.",
         detail: codexAuth.email ? `Logged in as ${codexAuth.email}.` : `Credentials found in ${path.join(codexHome ?? codexHomeDir(), "auth.json")}.`,
       });
     } else {
       checks.push({
         code: "codex_openai_api_key_missing",
         level: "warn",
-        message: "OPENAI_API_KEY is not set. Codex runs may fail until authentication is configured.",
-        hint: "Set OPENAI_API_KEY in adapter env, shell environment, or run `codex auth` to log in.",
+        message: "OPENAI_API_KEY is not set and no local Codex login was found.",
+        hint: "Run `codex login` in the same runtime as Paperclip, or set OPENAI_API_KEY if you intentionally want API-key billing.",
       });
     }
   }
@@ -221,7 +222,7 @@ export async function testEnvironment(
           level: "warn",
           message: "Codex CLI is installed, but authentication is not ready.",
           ...(detail ? { detail } : {}),
-          hint: "Configure OPENAI_API_KEY in adapter env/shell or run `codex login`, then retry the probe.",
+          hint: "Run `codex login` in the same runtime as Paperclip for ChatGPT-backed auth, or configure OPENAI_API_KEY for API-key billing.",
         });
       } else {
         checks.push({

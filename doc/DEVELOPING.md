@@ -151,7 +151,7 @@ Or use Compose:
 docker compose -f docker/docker-compose.quickstart.yml up --build
 ```
 
-See `doc/DOCKER.md` for API key wiring (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) and persistence details.
+See `doc/DOCKER.md` for local adapter authentication, including ChatGPT-backed Codex login without `OPENAI_API_KEY`, API key wiring, and persistence details.
 
 ## Docker For Untrusted PR Review
 
@@ -197,6 +197,8 @@ For `codex_local`, Paperclip also manages a per-company Codex home under the ins
 - `~/.paperclip/instances/default/companies/<company-id>/codex-home`
 
 If the `codex` CLI is not installed or not on `PATH`, `codex_local` agent runs fail at execution time with a clear adapter error. Quota polling uses a short-lived `codex app-server` subprocess: when `codex` cannot be spawned, that provider reports `ok: false` in aggregated quota results and the API server keeps running (it must not exit on a missing binary).
+
+`codex_local` can authenticate through either a local Codex login session or `OPENAI_API_KEY`. A non-empty `OPENAI_API_KEY` selects API-key billing; when it is absent, Paperclip relies on `codex login` state and attributes successful runs to ChatGPT-backed subscription usage.
 
 Local adapters require their corresponding CLI/session setup on the machine running Paperclip. External adapters are installed through the adapter/plugin flow and should not require hardcoded imports in `server/` or `ui/`.
 
