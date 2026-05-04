@@ -451,6 +451,21 @@ describe("server adapter registry", () => {
     // Auth token is still injected.
     expect(patchedCtx.agent.adapterConfig.env.PAPERCLIP_API_KEY).toBe("agent-run-jwt");
   });
+
+  it("exposes Hermes runtime command detection and install metadata", () => {
+    const adapter = requireServerAdapter("hermes_local");
+
+    expect(adapter.getRuntimeCommandSpec?.({})).toMatchObject({
+      command: "hermes",
+      detectCommand: "hermes",
+      installCommand: expect.stringContaining("NousResearch/hermes-agent"),
+    });
+    expect(adapter.getRuntimeCommandSpec?.({ hermesCommand: "/opt/hermes/bin/hermes" })).toEqual({
+      command: "/opt/hermes/bin/hermes",
+      detectCommand: "/opt/hermes/bin/hermes",
+      installCommand: null,
+    });
+  });
 });
 
 describe("resolveExternalAdapterRegistration", () => {

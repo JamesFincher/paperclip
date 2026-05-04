@@ -20,6 +20,7 @@ The `codex_local` adapter runs OpenAI's Codex CLI locally. It supports session p
 | `env` | object | No | Environment variables (supports secret refs) |
 | `timeoutSec` | number | No | Process timeout (0 = no timeout) |
 | `graceSec` | number | No | Grace period before force-kill |
+| `modelReasoningEffort` | string | No | Reasoning effort override passed to Codex (`minimal`, `low`, `medium`, `high`, `xhigh`) |
 | `fastMode` | boolean | No | Enables Codex Fast mode. Currently supported on `gpt-5.4` only and burns credits faster |
 | `dangerouslyBypassApprovalsAndSandbox` | boolean | No | Skip safety checks (dev only) |
 
@@ -40,6 +41,8 @@ When `fastMode` is enabled, Paperclip adds Codex config overrides equivalent to:
 ```
 
 Paperclip currently applies that only when the selected model is `gpt-5.4`. On other models, the toggle is preserved in config but ignored at execution time to avoid unsupported runs.
+
+`gpt-5.5` is available as a standard Codex model selection. Medium and high reasoning run at regular Codex speed through `modelReasoningEffort: "medium"` or `"high"`; they do not require the `fastMode` toggle.
 
 ## Managed `CODEX_HOME`
 

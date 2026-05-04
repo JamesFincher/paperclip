@@ -151,6 +151,25 @@ function buildCursorRuntimeCommandSpec(config: Record<string, unknown>): Adapter
   };
 }
 
+function readConfiguredHermesCommand(config: Record<string, unknown>): string {
+  const hermesCommand =
+    typeof config.hermesCommand === "string" ? config.hermesCommand.trim() : "";
+  if (hermesCommand.length > 0) return hermesCommand;
+  return readConfiguredCommand(config, "hermes");
+}
+
+function buildHermesRuntimeCommandSpec(config: Record<string, unknown>): AdapterRuntimeCommandSpec {
+  const command = readConfiguredHermesCommand(config);
+  const canSelfInstall = !hasPathSeparator(command) && command === "hermes";
+  return {
+    command,
+    detectCommand: command,
+    installCommand: canSelfInstall
+      ? "if ! command -v hermes >/dev/null 2>&1; then curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup; fi"
+      : null,
+  };
+}
+
 function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
   const config =
     ctx && typeof ctx === "object" && "config" in ctx && ctx.config && typeof ctx.config === "object"
@@ -328,8 +347,8 @@ const piLocalAdapter: ServerAdapterModule = {
   agentConfigurationDoc: piAgentConfigurationDoc,
 };
 
-// hermes-paperclip-adapter v0.2.0 predates the authToken field; cast is
-// intentional until hermes ships a matching AdapterExecutionContext type.
+// hermes-paperclip-adapter has its own execution context type; cast until its
+// public package tracks Paperclip's current AdapterExecutionContext exactly.
 const executeHermesLocal = hermesExecute as unknown as ServerAdapterModule["execute"];
 
 const hermesLocalAdapter: ServerAdapterModule = {
@@ -390,6 +409,7 @@ const hermesLocalAdapter: ServerAdapterModule = {
   supportsLocalAgentJwt: true,
   supportsInstructionsBundle: false,
   requiresMaterializedRuntimeSkills: false,
+  getRuntimeCommandSpec: buildHermesRuntimeCommandSpec,
   agentConfigurationDoc: hermesAgentConfigurationDoc,
   detectModel: () => detectModelFromHermes(),
 };

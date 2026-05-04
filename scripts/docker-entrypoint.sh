@@ -26,4 +26,8 @@ if [ "$changed" = "1" ]; then
     chown -R node:node /paperclip
 fi
 
+if [ -d /paperclip/.hermes ]; then
+    chown -R node:node /paperclip/.hermes
+fi
+
 exec gosu node "$@"
